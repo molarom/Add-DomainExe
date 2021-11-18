@@ -69,10 +69,6 @@ function Add-DomainExe {
         $Program
 
     )
-        
-    # Take user full path to file and correct it for use across the network.
-    $temp_pTF = #$FilePath.Replace(':','') # Change for practical application.
-    $netPathFile = $FilePath     #'\\' + $env:computername + '\' + $temp_pTF
     
     # Credential variable without prompt
     $user = $Username
@@ -95,20 +91,16 @@ function Add-DomainExe {
         else {
             try {
                 # Open a remote powershell session directly with the host if Get-WmiObject does not function correctly.
-                $s = New-PSSession -ComputerName $computer -Credential $adm_credential
+                $s = New-PSSession -ComputerName $computer -Credential $adm_credential -ErrorAction SilentlyContinue
 
-                # Get the currently logged on user's name and if we can't remote into the machine ignore it.
-                # $current_user = Get-WmiObject -Class win32_computersystem -ComputerName $item -ErrorAction SilentlyContinue | Select-Object username
-                
-                # Invoke-Command version.
-                $current_user = (Invoke-Command -Session $s -ScriptBlock {param ($comp) Get-WmiObject -Class win32_computersystem -ComputerName $comp -ErrorAction SilentlyContinue | Select-Object username} -ArgumentList $computer) -split '\\'
+                # Get the currently logged on user's name and if we can't remote into the machine ignore it.                
+                $current_user = (Invoke-Command -Session $s -ScriptBlock {param ($comp) Get-WmiObject -Class win32_computersystem -ComputerName $comp  | Select-Object username} -ArgumentList $computer) -split '\\'
                 $currentuser = $current_user[1].Split(';')
                 $currentuser = $currentuser[0]
 
                 Write-Host "[+] Placing [$Program] on [$computer] for [$currentuser]..."
                 $remoteHostPath = "C:\Users\$currentuser\Desktop"
-                # Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { copy $netPathFile $remoteHostPath}
-                Copy-Item $netPathFile -Destination $remoteHostPath -ToSession $s
+                Copy-Item $FilePath -Destination $remoteHostPath -ToSession $s
 
                 if($Persistence -eq "Y"){
                     Set-HiddenFile($computer,$remoteHostPath,$adm_credential)
@@ -131,8 +123,7 @@ function Add-DomainExe {
 
             # Any other serious errors print the stack trace.
             catch {
-                "[-] An Error has occured:" | Tee-Object -FilePath .\hosts_w_file.txt -Append | Write-Host
-                Write-Host $_.ScriptStackTrace
+                "[-] An Error has occured:" + $_.ScriptStackTrace | Tee-Object -FilePath .\hosts_w_file.txt -Append | Write-Host
             }
         Write-Host ""
         }
@@ -185,5 +176,5 @@ function Remove-DomainExe(){
 
     Write-Host "[+] Placing [$Program] on [$computer] for [$currentuser]..."
     $remoteHostPath = "C:\Windows\Users\[$currentuser]\Desktop"
-    Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { copy $netPathFile $remoteHostPath}
+    Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { copy $FilePath $remoteHostPath}
 }
