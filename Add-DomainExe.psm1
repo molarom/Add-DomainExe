@@ -1,12 +1,10 @@
 ﻿<#
 
 .DESCRIPTION
-
 Attempts to take a program the user specifies and distribute it across a domain environment.
 Must be run with domain admin credentials.
  
 .PARAMETER FilePath
-
 Full path to an executable the user wishes to distribute.
 
 .EXAMPLE
