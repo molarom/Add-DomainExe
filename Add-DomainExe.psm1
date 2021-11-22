@@ -1,15 +1,12 @@
 ﻿<#
-
 .DESCRIPTION
 Attempts to take a program the user specifies and distribute it across a domain environment.
 Must be run with domain admin credentials.
  
 .PARAMETER FilePath
 Full path to an executable the user wishes to distribute.
-
 .EXAMPLE
 PS> Add-DomainExe -FilePath "C:\Windows\Temp\saveme.exe" -Username "User" -Password "P@ssw0rd"
-
 #>
 
 function Add-DomainExe {
@@ -23,11 +20,14 @@ function Add-DomainExe {
         [parameter(mandatory=$true)]$Password
 
     )
+    $c = Get-Content $FilePath
     
+    # String clean up for later use.
     $inputpath = $FilePath -split "\\"
     $file_split = $inputpath[-1]
-    $program = $file_split -split "\."
-    
+    $file_split2 = $file_split -split "\."
+    $program = $FilePath[0]
+
     # Credential variable without prompt
     $user = $Username
     $pass = ConvertTo-SecureString -String $Password -AsPlainText -Force
@@ -66,8 +66,8 @@ function Add-DomainExe {
                         }
                         else {
                             Write-Host "[+] Placing [$Program] on [$computer] for [$_.Username]..."
-                            $remoteHostPath = "C:\Users\"+ $_.Username +"\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
-                            Copy-Item $FilePath -Destination $remoteHostPath -ToSession $s
+                            $remoteHostPath = "C:\Users\"+ $_.Username +"\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\" + $file_split
+                            invoke-command -script {param($remoteFile,$contents) set-content -path $remoteFile -value $contents} -argumentlist $remoteFile,$c
                             Write-Host "[+] Logging off $_.Username..."
                             logoff $_.sessionname
                         }
@@ -109,14 +109,22 @@ function Remove-DomainExe(){
     [parameter(mandatory=$true)]$Password
     )
 
+    $user = $Username
+    $pass = ConvertTo-SecureString -String $Password -AsPlainText -Force
+    $adm_credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $user,$pass
+
     $hosts = Get-Content $HostFile
     ForEach ($host in $hosts){
         
-        $remoteDirectories = 'C:\User*\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\'
+        $remoteDirectories = 'C:\Users\*'
 
-        $s = New-PSSession -ComputerName $computer -Credential $adm_credential -ErrorAction SilentlyContinue
+        $s = New-PSSession -ComputerName $host -Credential $adm_credential -ErrorAction SilentlyContinue
         invoke-command -session $s {Get-ChildItem $remoteDirectories | ForEach-Object {
-            Remove-Item $_ + $FileName
+            $u1 = $_.split('\\')
+            $remoteUser = $u1[-1]
+            $remoteDirectories = "\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\"
+            Write-Host "[+] Removing file for [$remoteUser]"
+            Remove-Item $_ + $remoteDirectories + $FileName
             }
         Remove-PSSession $s
         }
